@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
 use termion::input::TermRead;
+use termion::event;
 
 use crate::app_context::AppContext;
 use crate::browser_states::BrowserState;
@@ -184,12 +185,6 @@ impl App {
     ) -> Result<Option<Launchable>, ProgramError> {
 
         let mut screen = Screen::new()?;
-        write!(
-            screen.stdout,
-            "{}{}",
-            termion::clear::All,
-            termion::cursor::Hide
-        )?;
 
         // create the initial state
         if let Some(bs) = BrowserState::new(
@@ -220,17 +215,47 @@ impl App {
 
         // we listen for keys in a separate thread so that we can go on listening
         // when a long search is running, and interrupt it if needed
-        let keys = stdin().keys();
+        let events = stdin().events();
         let (tx_keys, rx_keys) = mpsc::channel();
         let (tx_quit, rx_quit) = mpsc::channel();
         let cmd_count = Arc::new(AtomicUsize::new(0));
         let key_count = Arc::clone(&cmd_count);
         thread::spawn(move || {
-            for c in keys {
-                key_count.fetch_add(1, Ordering::SeqCst);
-                // we send the command to the receiver in the
-                //  main event loop
-                tx_keys.send(c).unwrap();
+            for evt in events {
+                match evt {
+                    Ok(evt) => {
+                        match evt {
+                            event::Event::Key(key) => {
+                                key_count.fetch_add(1, Ordering::SeqCst);
+                                // we send the command to the receiver in the
+                                //  main event loop
+                                match tx_keys.send(key) {
+                                    Err(e) => {
+                                        warn!("got a send error: {:?}", e);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            event::Event::Mouse(me) => {
+                                match me {
+                                    event::MouseEvent::Press(_, x, y) => {
+                                        debug!("Press x={} y={}", x, y);
+                                    }
+                                    event::MouseEvent::Release(x, y) => {
+                                        debug!("Release x={} y={}", x, y);
+                                    }
+                                    event::MouseEvent::Hold(x, y) => {
+                                        debug!("Hold x={} y={}", x, y);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Err(e) => {
+                        warn!("got an error in events: {:?}", e);
+                    }
+                }
                 let quit = rx_quit.recv().unwrap();
                 if quit {
                     // cleanly quitting this thread is necessary
@@ -243,7 +268,6 @@ impl App {
         });
 
         let mut cmd = Command::new();
-        screen.write_input(&cmd)?;
         screen.write_status_text("Hit <esc> to quit, '?' for help, or type some letters to search")?;
         self.state().write_flags(&mut screen, con)?;
         loop {
@@ -255,6 +279,7 @@ impl App {
                     TaskLifetime::new(&cmd_count),
                 )?;
             }
+            screen.write_input(&cmd)?;
             let c = match rx_keys.recv() {
                 Ok(c) => c,
                 Err(_) => {
@@ -263,7 +288,7 @@ impl App {
                     break;
                 }
             };
-            cmd.add_key(c?);
+            cmd.add_key(c);
             cmd = self.apply_command(cmd, &mut screen, con)?;
             tx_quit.send(self.quitting).unwrap();
         }

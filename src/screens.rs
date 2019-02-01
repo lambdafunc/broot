@@ -1,12 +1,13 @@
 use std::io::{self, stdout, Write};
 use termion::color;
+use termion::input::{TermRead, MouseTerminal};
 use termion::raw::{IntoRawMode, RawTerminal};
 use termion::screen::AlternateScreen;
 
 pub struct Screen {
     pub w: u16,
     pub h: u16,
-    pub stdout: AlternateScreen<RawTerminal<io::Stdout>>,
+    pub stdout: AlternateScreen<MouseTerminal<RawTerminal<io::Stdout>>>,
 }
 
 #[derive(Debug)]
@@ -20,9 +21,13 @@ pub struct ScreenArea {
 
 impl Screen {
     pub fn new() -> io::Result<Screen> {
-        let stdout = AlternateScreen::from(stdout().into_raw_mode()?);
+        let stdout = io::stdout().into_raw_mode()?;
+        let stdout = MouseTerminal::from(stdout);
+        let stdout = AlternateScreen::from(stdout);
+        //let stdout = MouseTerminal::from(stdout().into_raw_mode()?);
         let mut screen = Screen { w:0, h:0, stdout };
         screen.read_size()?;
+        write!(screen.stdout, "{}", termion::cursor::Hide)?;
         Ok(screen)
     }
     pub fn read_size(&mut self) -> io::Result<()> {
